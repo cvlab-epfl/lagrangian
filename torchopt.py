@@ -277,8 +277,7 @@ class pytorchAdamOptim():
             x1[ids]    = x[ids].data
             bestL[ids] = currL[ids]
                     
-            for loss in currL:
-                loss.backward(retain_graph=True)
+            currL.sum().backward()
                 
             optim.step()
             if(schedP):

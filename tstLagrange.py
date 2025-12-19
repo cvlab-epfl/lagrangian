@@ -91,7 +91,7 @@ insideP  =  1
 analyticP = 1
 lag = pytorchKktOptim(objF,cstF) 
 x0 =  makeTensor(x0)
-x1 = lag.optim(x0,nIt=10,lambd=1e-6,rho=10.0,verbP=True)
+x1 = lag.optim(x0,nIt=10,lambd=1e-6,rho=100.0,verbP=True)
 x0 = fromTensor(x0)
 x1 = fromTensor(x1)
 #%% Augmented Lagrange optimization
