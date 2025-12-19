@@ -4,12 +4,15 @@
 #                                IMPORTS
 #-----------------------------------------------------------------------------
 #%%
+import os
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK']='1'
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from   torch.autograd.functional import jacobian
 
-from auxfuncs  import plotCircle,getFig,pltInline,printTensor,fromTensor,makeTensor,currentDevice
+from util      import plotCircle,getFig,pltInline,printTensor,fromTensor,makeTensor,currentDevice
 from torchopt  import pytorchKktOptim,pytorchAlmOptim,pytorchScipyOptim
 #%%---------------------------------------------------------------------------
 #                           Projection on a Circle
@@ -21,7 +24,7 @@ m = 1
 b = 5
 
 # Batches
-def objF(x):
+def objF(x,computeJ=False):
     
     device=currentDevice()
     
@@ -29,10 +32,11 @@ def objF(x):
     r   = n
     
     F = x-makeTensor(xt)
-    J = torch.zeros((b,r,n),device=device)
-    
-    for i in range(n):
-        J[:,i,i]  = 1.0
+    J = None
+    if(computeJ):
+        J = torch.zeros((b,r,n),device=device)   
+        for i in range(n):
+            J[:,i,i]  = 1.0
     
     return F,J
     
@@ -83,7 +87,7 @@ def cstF1(x):
         
     return C,A
 #%%
-xt = np.random.randn(b,n)                         # Attractors
+xt = np.random.randn(b,n)                     # Attractors
 xg = xt / np.linalg.norm(xt,axis=1,keepdims=True) # Desired result
 x0 = xt + 0.1 * np.random.randn(b,n)
 #%% KKt optimization
@@ -94,6 +98,14 @@ x0 =  makeTensor(x0)
 x1 = lag.optim(x0,nIt=10,lambd=1e-6,rho=100.0,verbP=True)
 x0 = fromTensor(x0)
 x1 = fromTensor(x1)
+plotCircle(0.0,0.0,1.0,'g')
+plt.plot(xg[:,0],xg[:,1],'xg')    # What the result should be
+plt.plot(xt[:,0],xt[:,1],'.r')    # Target point 
+plt.plot(x0[:,0],x0[:,1],'.c')    # Start point 
+plt.plot(x1[:,0],x1[:,1],'.b')    # Optimized result
+plt.plot([xt[:,0],x1[:,0]],[xt[:,1],x1[:,1]],'--g')
+ax=plt.gca()
+ax.set_aspect('equal')
 #%% Augmented Lagrange optimization
 lag = pytorchAlmOptim(objF,cstF)
 x1  = lag.optim(x0,nIt=10,rho=100.0,verbP=True)
@@ -111,6 +123,9 @@ plt.plot(x1[:,0],x1[:,1],'.b')    # Optimized result
 plt.plot([xt[:,0],x1[:,0]],[xt[:,1],x1[:,1]],'--g')
 ax=plt.gca()
 ax.set_aspect('equal')
+#%% Dbg
+lag = pytorchKktOptim(objF,cstF) 
+lag.testF(x0)
 #%%---------------------------------------------------------------------------
 #               Projection on the interesection of 2 circles
 #-----------------------------------------------------------------------------
@@ -121,7 +136,7 @@ b = 20
 xc = 0.1
 yc = 0.2
 
-def objF(x):
+def objF(x,computeJ=False):
     
     device=currentDevice()
     
@@ -129,10 +144,11 @@ def objF(x):
     r   = n
     
     F = x-makeTensor(xt)
-    J = torch.zeros((b,r,n),device=device)
-    
-    for i in range(n):
-        J[:,i,i]  = 1.0
+    J = None
+    if(computeJ):
+        J = torch.zeros((b,r,n),device=device)
+        for i in range(n):
+            J[:,i,i]  = 1.0
     
     return F,J
     
@@ -193,7 +209,7 @@ xc = 0.1
 yc = 0.2
 zc = 0.3
 
-def objF(x):
+def objF(x,computeJ=False):
     
     device = currentDevice()
     
@@ -201,10 +217,11 @@ def objF(x):
     r   = n
     
     F = x-makeTensor(xt)
-    J = torch.zeros((b,r,n),device=device)
-    
-    for i in range(n):
-        J[:,i,i]  = 1.0
+    J = None
+    if(computeJ):
+        J = torch.zeros((b,r,n),device=device)
+        for i in range(n):
+            J[:,i,i]  = 1.0
     
     return F,J
 
@@ -283,32 +300,3 @@ fig = getFig()
 ax  = fig.add_subplot(111, projection='3d')
 ax.scatter(x0[:,0],x0[:,1],x0[:,2],'.r')
 ax.scatter(x1[:,0],x1[:,1],x1[:,2],'.b')
-#%%---------------------------------------------------------------------------
-#                 Test ObjF and CstF 
-#-----------------------------------------------------------------------------
-#%% Check objF
-eps = 1e-4
-x0   = makeTensor(x0)
-x    = makeTensor(x0)
-F0,J = objF(x)
-for i in range(n):
-    x[:,i]=x0[:,i]+eps
-    F1,_ = objF(x)
-    dF = (F1-F0)/eps
-    print(i)
-    printTensor(J[:,:,i])
-    print('----')
-    printTensor(dF)
-    x[:,i]=x0[:,i]
-#%% Check cstF
-eps = 1e-4
-x    = makeTensor(x0)
-C0,A = cstF(x)
-for i in range(n):
-    x[:,i]=x0[:,i]+eps
-    C1,_ = cstF(x)
-    dC = (C1[:,0]-C0[:,0])/eps
-    print(i)
-    printTensor(A[:,0,i])
-    printTensor(dC)
-    x[:,i]=x0[:,i]

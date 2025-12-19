@@ -15,7 +15,34 @@ except:
     def AdEMAMix(**kwargs):
         return None
 
-from auxfuncs import printTensor,makeTensor,fromTensor,raiseError
+from util import printTensor,makeTensor,fromTensor,raiseError
+
+def pytorchLagrangeOpt(objF,cstF,x0,nIt=10,lambd=1e-6,rho=100.0,kktP=True,verbP=False):
+    
+    if(kktP):
+        lag = pytorchKktOptim(objF,cstF)
+        x1  = lag.optim(x0,nIt=nIt,lambd=lambd,rho=rho,verbP=verbP)
+    else:
+        lag = pytorchAlmOptim(objF,cstF)
+        x1  = lag.optim(x0,nIt=nIt,rho=rho,verbP=verbP)
+    return x1
+
+
+    
+#%%---------------------------------------------------------------------------
+#                     Constrained LSQ Optimization
+#=============================================================================
+
+class pytorchCnstOptim():
+    
+    def testF(self,x):
+        x = makeTensor(x,gradP=False)
+        testBatchJac(self.objF,x)
+        
+    def testC(self,x):
+        x = makeTensor(x,gradP=False)
+        testBatchJac(self.cstF,x)
+        
 #%%---------------------------------------------------------------------------
 #                      KKT Newton step for each batch element
 #
@@ -35,7 +62,7 @@ from auxfuncs import printTensor,makeTensor,fromTensor,raiseError
 #    A : b x m x n
 # ----------------------------------------------------------------------------
 #%%
-class pytorchKktOptim():
+class pytorchKktOptim(pytorchCnstOptim):
     
     def __init__(self,objF,cstF):
         
@@ -80,6 +107,8 @@ class pytorchKktOptim():
                             
         return x
     
+    
+    
     def print(self,x,it=None,verbP=True):
        
         if(verbP):
@@ -118,15 +147,21 @@ def makeKktMatrices(F,J,C,A,rho=0.0):
     # C output of cstF, b x m
     # J jacobian of objF, b x r x n
     # A jacobian of cstF, b x m x n
-    b,r,n  = J.size()
-    _,m,_  = A.size()
+    
+    b,m,n  = A.size()
+    _,r    = F.size()
     device = F.device
     
     assert((A.size(0)==b) and (A.size(2)==n) and (F.size(1)==r) and (C.size(1)==m))
     
-    JtJ  = torch.bmm(J.transpose(1,2),J)
     At   = A.transpose(1,2)
-    JtF  = torch.bmm(J.transpose(1,2),F.view((b,r,1))).squeeze()
+    if(J is None):
+        assert (n==r)
+        JtJ  = torch.eye(n,device=C.device).view((1,n,n)).repeat((b,1,1))
+        JtF  = F
+    else:
+        JtJ  = torch.bmm(J.transpose(1,2),J)
+        JtF  = torch.bmm(J.transpose(1,2),F.view((b,r,1))).squeeze()
     
     if(rho>0.0):
         JtJ += rho*torch.bmm(At,A)
@@ -165,7 +200,7 @@ def makeKktMatrices(F,J,C,A,rho=0.0):
 #
 # where L are the Lagrange multipliers
 #%%
-class pytorchAlmOptim(): 
+class pytorchAlmOptim(pytorchCnstOptim): 
     
     def __init__(self,objF,cstF,dspF=None):
     
@@ -210,13 +245,12 @@ class pytorchAlmOptim():
                 x1[ids]    = x[ids].data
                 bestL[ids] = currL[ids]
                
-                for loss in currL:
-                    loss.backward(retain_graph=True)
+                computeAllGrads(currL,sumP=True)
                 optimizer.step()
          
             x.data[:]=x1.data
 
-            # Update multipliers
+            # Update lagrange multipliers
             cst,_  = self.cstF(x)
             if(lam is None):
                 lam = rho * cst.detach().clone().requires_grad_(False)
@@ -243,8 +277,8 @@ class pytorchAlmOptim():
             printTensor(obj.t(),prefix='F:')
             printTensor(cst.t(),prefix='C:')
 #%%---------------------------------------------------------------------------
-#                     Unconstrained Optimization
-#-----------------------------------------------------------------------------
+#                    Unconstrained Adam Optimization
+#=============================================================================
 #%%
 class pytorchAdamOptim(): 
     
@@ -276,10 +310,10 @@ class pytorchAdamOptim():
             ids        = currL<bestL
             x1[ids]    = x[ids].data
             bestL[ids] = currL[ids]
-                    
-            currL.sum().backward()
-                
+            
+            computeAllGrads(currL,sumP=True)
             optim.step()
+            
             if(schedP):
                 scheduler.step()
          
@@ -371,6 +405,54 @@ def getTorchOptimizer(z,lr=0.01,typ=None):
     elif(typ=='ademamix'):
         return AdEMAMix(params=[z], lr=lr, betas=(0.9, 0.999, 0.9999), alpha=2.0, beta3_warmup=None, alpha_warmup=None, weight_decay=0.0)
     return torch.optim.Adam([z],lr=lr)
+
+def computeAllGrads(losses,sumP=True):
+    if(sumP):
+        # The sum is never actually used but this forces the computation of all derivatives
+        losses.sum().backward()
+    else:
+        # Explicity loop thru the loss vector
+        for loss in losses:
+            loss.backward(retain_graph=True)
+    
+#%%---------------------------------------------------------------------------
+#                        Test Functions
+#-----------------------------------------------------------------------------
+
+#%% Check objF assumed to return a value F and its gradient G
+def testBatchGrad(objF,x0,eps=1e-4):
+    b,n = x0.size()
+    x0   = makeTensor(x0)
+    x    = makeTensor(x0)
+    F0,G = objF(x)
+    for i in range(n):
+        x[:,i]=x0[:,i]+eps
+        F1,_ = objF(x)
+        dF = (F1-F0)/eps
+        print(i)
+        printTensor(G[:,i])
+        print('----')
+        printTensor(dF)
+        x[:,i]=x0[:,i]
+#%% Check objF assumed to return a vector F and its Jacobian J
+def testBatchJac(objF,x0,eps=1e-4):
+    b,n = x0.size()
+    x    = makeTensor(x0)
+    F0,J = objF(x)
+    if(J is None):
+        print('testBatchJac: No jabobian computed')
+        return
+    m    = F0.size(1)
+    for i in range(n):
+        x[:,i]=x0[:,i]+eps
+        F1,_ = objF(x)
+        for j in range(m):
+            dF = (F1[:,j]-F0[:,j])/eps
+            print('coord {:2d}, cnst {:2d}'.format(i,j))
+            printTensor(J[:,j,i])
+            printTensor(dF)
+        x[:,i]=x0[:,i]
+
 
 
 
