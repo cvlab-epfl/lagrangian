@@ -15,7 +15,7 @@ except:
     def AdEMAMix(**kwargs):
         return None
 
-from util import printTensor,makeTensor,fromTensor,raiseError
+from auxfuncs import printTensor,makeTensor,fromTensor,raiseError
 
 def pytorchLagrangeOpt(objF,cstF,x0,nIt=10,lambd=1e-6,rho=100.0,kktP=True,verbP=False):
     
@@ -25,10 +25,9 @@ def pytorchLagrangeOpt(objF,cstF,x0,nIt=10,lambd=1e-6,rho=100.0,kktP=True,verbP=
     else:
         lag = pytorchAlmOptim(objF,cstF)
         x1  = lag.optim(x0,nIt=nIt,rho=rho,verbP=verbP)
+
     return x1
 
-
-    
 #%%---------------------------------------------------------------------------
 #                     Constrained LSQ Optimization
 #=============================================================================
@@ -343,7 +342,7 @@ class pytorchScipyOptim():
         self.cnstF = cstF
     
     def optim(self,x0,verbP=False,**kwargs):
-        
+            
         def cstF(x):
             assert(self.cnstF is not None)
             x = makeTensor(x,gradP=False,dblP=True)
@@ -366,7 +365,29 @@ class pytorchScipyOptim():
                 x,fun=scipyMinimizeLoss(auxF,x,verbP=False,cstF=cstF,cstA=cstA)
             ys[i,:]=x
         return ys
-                
+#%%----------------------------------------------------------------------------
+#                             Optimizers
+#------------------------------------------------------------------------------
+
+def getTorchOptimizer(z,lr=0.01,typ=None):
+    
+    if(typ=='MadGrad'):
+        return topt.MADGRAD([z],lr=lr,momentum=0.9,weight_decay=0,eps=1e-6)
+    elif(typ=='LFBGS'):
+        return torch.optim.LBFGS([z],lr=lr,line_search_fn='strong_wolfe')
+    elif(typ=='ademamix'):
+        return AdEMAMix(params=[z], lr=lr, betas=(0.9, 0.999, 0.9999), alpha=2.0, beta3_warmup=None, alpha_warmup=None, weight_decay=0.0)
+    return torch.optim.Adam([z],lr=lr)
+
+def computeAllGrads(losses,sumP=True):
+    if(sumP):
+        # The sum is never actually used but this forces the computation of all derivatives
+        losses.sum().backward()
+    else:
+        # Explicity loop thru the loss vector
+        for loss in losses:
+            loss.backward(retain_graph=True)
+    
 def scipyMinimizeLoss(lossF,x,verbP=False,cstF=None,cstA=None,**kwargs):
     
     def objF(x): 
@@ -391,30 +412,9 @@ def scipyMinimizeLoss(lossF,x,verbP=False,cstF=None,cstA=None,**kwargs):
    
     if(verbP):
         print('{}: {}'.format(opt.message,opt.fun))
+        
     return opt.x,opt.fun
-#%%----------------------------------------------------------------------------
-#                             Optimizers
-#------------------------------------------------------------------------------
-
-def getTorchOptimizer(z,lr=0.01,typ=None):
-    
-    if(typ=='MadGrad'):
-        return topt.MADGRAD([z],lr=lr,momentum=0.9,weight_decay=0,eps=1e-6)
-    elif(typ=='LFBGS'):
-        return torch.optim.LBFGS([z],lr=lr,line_search_fn='strong_wolfe')
-    elif(typ=='ademamix'):
-        return AdEMAMix(params=[z], lr=lr, betas=(0.9, 0.999, 0.9999), alpha=2.0, beta3_warmup=None, alpha_warmup=None, weight_decay=0.0)
-    return torch.optim.Adam([z],lr=lr)
-
-def computeAllGrads(losses,sumP=True):
-    if(sumP):
-        # The sum is never actually used but this forces the computation of all derivatives
-        losses.sum().backward()
-    else:
-        # Explicity loop thru the loss vector
-        for loss in losses:
-            loss.backward(retain_graph=True)
-    
+        
 #%%---------------------------------------------------------------------------
 #                        Test Functions
 #-----------------------------------------------------------------------------
@@ -452,8 +452,3 @@ def testBatchJac(objF,x0,eps=1e-4):
             printTensor(J[:,j,i])
             printTensor(dF)
         x[:,i]=x0[:,i]
-
-
-
-
-
