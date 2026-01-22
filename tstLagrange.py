@@ -209,7 +209,9 @@ xc = 0.1
 yc = 0.2
 zc = 0.3
 
-def objF(x,computeJ=False):
+useJ = 0
+
+def objF(x):
     
     device = currentDevice()
     
@@ -218,10 +220,14 @@ def objF(x,computeJ=False):
     
     F = x-makeTensor(xt)
     J = None
-    if(computeJ):
+    if(useJ == 1):
+        # J is treated as a full matrix
         J = torch.zeros((b,r,n),device=device)
         for i in range(n):
             J[:,i,i]  = 1.0
+    elif(useJ == 2):
+        # J is treated as a diagonal matrix
+        J =  torch.ones((b,n),device=device) 
     
     return F,J
 
@@ -278,12 +284,12 @@ def cstFP (x):
 #%%  
 xt      = np.random.randn(b,n)   
 x0      =  xt + 0.1 * np.random.randn(b,n)
-insideP = True
+insideP = False
 cstF = cstFP
 #%%
 lag = pytorchKktOptim(objF,cstF) 
 x0 = makeTensor(x0)
-x1 =  lag.optim(x0,nIt=10,lambd=1.e-6,rho=10.0,verbP=True)
+x1 =  lag.optim(x0,nIt=10,lambd=1e-6,rho=1000.0,verbP=True)
 x0 = fromTensor(x0)
 x1 = fromTensor(x1)
 #%% Augmented Lagrange optimization

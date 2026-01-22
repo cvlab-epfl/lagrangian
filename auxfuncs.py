@@ -6,7 +6,7 @@
 #%%
 
 import torch
-import sys
+import sys,pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.core.getipython import get_ipython
@@ -70,6 +70,19 @@ def printArray(xs,form='{:2.4f}',trP=False,prefix=None):
     else:
         print('printFlats cannot print arrays of size {:}'.format(len(xs.shape)))
 
+#%%----------------------------------------------------------------------------
+#                                  Files
+#------------------------------------------------------------------------------
+
+def dumpToFile(fileName,obj,verbP=True):
+    if(fileName is not None):
+        try:
+            with open(fileName,'wb') as f:
+                pickle.dump(obj,f)
+        except IOError:
+            if(verbP):
+                print('dumpToFile: cannot open', fileName)     
+                
 #%%----------------------------------------------------------------------------
 #                                  Errors
 #------------------------------------------------------------------------------

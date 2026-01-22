@@ -15,7 +15,7 @@ except:
     def AdEMAMix(**kwargs):
         return None
 
-from auxfuncs import printTensor,makeTensor,fromTensor,raiseError
+from auxfuncs import printTensor,makeTensor,fromTensor,raiseError,dumpToFile
 
 def pytorchLagrangeOpt(objF,cstF,x0,nIt=10,lambd=1e-6,rho=100.0,kktP=True,verbP=False):
     
@@ -68,7 +68,7 @@ class pytorchKktOptim(pytorchCnstOptim):
         self.objF = objF
         self.cstF = cstF
       
-    def optim(self,x0,nIt=10,lambd=0.0,rho=0.0,verbP=False):
+    def optim(self,x0,nIt=10,lambd=0.0,rho=0.0,verbP=False,dbgP=False):
         
         x      = makeTensor(x0,gradP=False)
         augmL  = torch.inf*torch.ones(x.size(0),device = x.device)
@@ -80,8 +80,9 @@ class pytorchKktOptim(pytorchCnstOptim):
             F,J = self.objF(x) 
             C,A = self.cstF(x) 
             # Solve the KKt equestions, return dx and lagrange multiplier
-            dx,lm = solveKkt(F,J,C,A,lambd=lambd,rho=np.abs(rho))
+            dx,lm = solveKkt(F,J,C,A,lambd=lambd,rho=np.abs(rho),dbgP=dbgP)
             if(rho>0.0):
+                assert(lm is not None)
                 # Pick a step size that decreases the augmented lagrangian
                 s   = 1.0
                 for _ in range(5):
@@ -103,10 +104,10 @@ class pytorchKktOptim(pytorchCnstOptim):
                 
             # Increase rho
             rho = rho*1.5
+            
+           
                             
         return x
-    
-    
     
     def print(self,x,it=None,verbP=True):
        
@@ -119,42 +120,98 @@ class pytorchKktOptim(pytorchCnstOptim):
             printTensor(F.pow(2).sum(dim=1))
             print('C:',end=' ')
             printTensor(C.pow(2).sum(dim=1))
+            
+def solveKkt(F,J,C,A,lambd=0.0,rho=0.0,dbgP=False,sparseP=False):
+    
+    if(dbgP):
+        print('Save matrices onto file matrix.dat')
+        dumpToFile('matrix.dat',[fromTensor(F),fromTensor(J),fromTensor(C),fromTensor(A)])
+        assert(0)
         
+    if(rho==0):
+        if(J is None):
+            # J is assumed to be the identity matrix
+            return solveReducedKkt(F,C,A,lambd=0.0,sparseP=sparseP)
+        elif(len(J.size())==2):
+            # J is assumed to be a diagonal matrix
+            return solveDiagonalKkt(F,J,C,A,lambd=0.0,sparseP=sparseP)
+    
+    return solveFullKkt(F,J,C,A,lambd=lambd,rho=rho,sparseP=sparseP)
+    
 
 # Return state increment and Lagrangian multiplier    
-def solveKkt(F,J,C,A,lambd=0.0,rho=0.0,dbgP=False):
+def solveFullKkt(F,J,C,A,lambd=0.0,rho=0.0,sparseP=False):
     
     _,m,n = A.size()
     
     K,Y = makeKktMatrices(F,J,C,A,rho=rho)
-    #printTensor(K[1])
     if(lambd>0.0):
-        b,k,l=K.size()  
+        b,m,l=K.size()  
         Id = lambd*torch.eye(l,device=K.device).view((1,l,l)).repeat((b,1,1))
         K += Id
-    if(dbgP):
-        printTensor(torch.linalg.det(K),prefix='det:')
-    dX = torch.linalg.solve(K,Y)
     
+    dX = batchSolve(K,Y,sparseP=sparseP).squeeze()
+    if(dX is None):
+        print('solveFullKtt: batchSolve failed for sparseP {:}'.format(sparseP))
+        return None,None
+    else:
+        return dX[:,0:n],dX[:,n:]
 
-    return dX[:,0:n,0],dX[:,n:,0]
+# J is assumed to be a diagonal matrix represented only by its diaganal
+# Solve  A (JtJ^{-1}) A^t L  = C - A F 
+# Return dx      = (JtJ^{-1}) (F + A^t L)
+def solveDiagonalKkt(F,J,C,A,lambd=0.0,sparseP=False):
+    
+    assert(2==len(J.size())) # Only diagonal is specified as 1D vector for each matrix
+    
+    J0  = torch.diag_embed(J)
+    J1  = torch.diag_embed(1.0  /  J)
+    J2  = torch.diag_embed(1.0  /  J.pow(2))
+        
+    At   = A.transpose(1,2)
+    AtA  = torch.bmm(A,torch.bmm (J2,At))
+    
+    if(lambd>0.0):
+        b,n,_= AtA.size()  
+        Id   = lambd*torch.eye(n,device=A.device).view((1,n,n)).repeat((b,1,1))
+        AtA += Id  
+    lmbW = batchSolve(AtA,torch.bmm(A,torch.bmm(J1,F.unsqueeze(2))).squeeze(2)-C,sparseP=sparseP)
+    if(lmbW is None):
+        print('solveDiagonalKkt(: batchSolve failed for sparseP {:}'.format(sparseP)) 
+        return None,None
+         
+    dx   = torch.bmm(J0,F.unsqueeze(2)) - torch.bmm(At,lmbW.unsqueeze(2))
+    dx   = torch.bmm (J2,dx)
+    return dx.squeeze(2),lmbW
 
+# J is assumed to be the identity matrix
+# Solve  AA^t L  = C - A F 
+# Return dx      = F + A^t L 
+def solveReducedKkt(F,C,A,lambd=0.0,sparseP=False):
+    
+    At   = A.transpose(1,2)
+    AtA  = torch.bmm(A,At)
+    if(lambd>0.0):
+        b,n,_= AtA.size()  
+        Id   = lambd*torch.eye(n,device=A.device).view((1,n,n)).repeat((b,1,1))
+        AtA += Id  
+    b    = F.unsqueeze(2)
+    lmbW = batchSolve(AtA,C-torch.bmm(A,b).squeeze(2),sparseP=sparseP)
+    if(lmbW is None):
+        print('solveReducedKkt: batchSolve failed for sparseP {:}'.format(sparseP)) 
+        return None,None
+         
+    dx   = b + torch.bmm(At,lmbW.unsqueeze(2))
+    return dx.squeeze(2),None
+    
 def makeKktMatrices(F,J,C,A,rho=0.0):
     
-    # b: batch size, n: dimension of input, r: dimension of output, m: number of constraints
-    # F output of objF, b x r
-    # C output of cstF, b x m
-    # J jacobian of objF, b x r x n
-    # A jacobian of cstF, b x m x n
-    
-    b,m,n  = A.size()
-    _,r    = F.size()
-    device = F.device
-    
-    assert((A.size(0)==b) and (A.size(2)==n) and (F.size(1)==r) and (C.size(1)==m))
+    b,m,n,r =  getMatrixDimensions(F,J,C,A)
+    device  = F.device
     
     At   = A.transpose(1,2)
     if(J is None):
+        # No J specified. Make the upper left corner of the matrix identity
         assert (n==r)
         JtJ  = torch.eye(n,device=C.device).view((1,n,n)).repeat((b,1,1))
         JtF  = F
@@ -165,33 +222,54 @@ def makeKktMatrices(F,J,C,A,rho=0.0):
     if(rho>0.0):
         JtJ += rho*torch.bmm(At,A)
         JtF += rho*torch.bmm(At,C.view((b,m,1))).squeeze()
-        
-    if(0):
-        #print(JtJ.size())
-        #print(At.size())
-        Ktop = torch.cat((JtJ,At),dim=2)   # (b, n, n+m) 
-        #print(Ktop.size())
-        Kbot = torch.cat((A,torch.zeros((b,m,m),device=A.device)),dim=2) # (b, m, n+m) 
-        #print(Kbot.size())
-        K =  torch.cat((Ktop,Kbot),dim=1) # (B, n+m, n+m)
-        #print(K.size())
-        
-        #print(JtF .size(),C.size())
-        Y =  torch.cat((JtF,C),dim=1)
-        # print(Y.size())
-    else:
-        K=torch.zeros([b,n+m,n+m],device=device)
-        Y=torch.zeros([b,n+m,1],device=device)
+           
+    K=torch.zeros([b,n+m,n+m],device=device)
+    Y=torch.zeros([b,n+m,1],device=device)
     
-        
-        K[:,0:n,0:n]   = JtJ 
-        K[:,0:n,n:n+m] = At
-        K[:,n:n+m,0:n] = A 
-    
-        Y[:,0:n,0]     = JtF
-        Y[:,n:n+m,0]   = C     
-    
+    K[:,0:n,0:n]   = JtJ 
+    K[:,0:n,n:n+m] = At
+    K[:,n:n+m,0:n] = A 
+
+    Y[:,0:n,0]     = JtF
+    Y[:,n:n+m,0]   = C
+
     return K,Y
+
+# b: batch size, n: dimension of input, r: dimension of output, m: number of constraints
+# F output of objF, b x r
+# C output of cstF, b x m
+# J jacobian of objF, b x r x n
+# A jacobian of cstF, b x m x n
+def getMatrixDimensions(F,J,C,A):
+    
+    b,m,n  = A.size()
+    _,r    = F.size()
+   
+    # Check matrix dimensions
+    if(not ((F.size(0)==b) and (C.size(0)==b) and (C.size(1)==m))):
+        print('F',F.size())
+        print('C',C.size())
+        print('A',A.size())
+        raiseError('makeKktMatrices: F,C, and A have incomptiable dimensions')
+    if(J is not None):
+        if(not((J.size(0)==b) and (J.size(1)==r) and (J.size(2)==n))):
+            raiseError('makeKktMatrices: F,C, and J have incomptiable dimensions')
+            
+    return b,m,n,r
+    
+def batchSolve(A,y,sparseP=False):
+    
+    if(sparseP):
+        return batchSparseSolve(A.to_sparse(),y.squeeze())
+    else:
+        try:
+            return torch.linalg.solve(A,y)
+        except:
+            return None    
+
+def batchSparseSolve(A,y):
+    
+    raiseError('batchSparseSolve is not imlemented')
 #%%---------------------------------------------------------------------------
 #                          Augmented Lagrangian
 #
