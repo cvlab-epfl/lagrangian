@@ -12,8 +12,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from   torch.autograd.functional import jacobian
 
-from util      import plotCircle,getFig,pltInline,printTensor,fromTensor,makeTensor,currentDevice
-from torchopt  import pytorchKktOptim,pytorchAlmOptim,pytorchScipyOptim
+from auxfuncs    import plotCircle,getFig,pltInline,printTensor,fromTensor,makeTensor,currentDevice
+from batchoptim  import pytorchKktOptim,pytorchAlmOptim,pytorchScipyOptim
 #%%---------------------------------------------------------------------------
 #                           Projection on a Circle
 #-----------------------------------------------------------------------------
