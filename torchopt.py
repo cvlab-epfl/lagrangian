@@ -104,9 +104,7 @@ class pytorchKktOptim(pytorchCnstOptim):
                 
             # Increase rho
             rho = rho*1.5
-            
-           
-                            
+        
         return x
     
     def print(self,x,it=None,verbP=True):
