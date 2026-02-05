@@ -12,4 +12,4 @@ Constrained optimization using lagrange multipliers:
   title = {{Least-Squares Minimization Under Constraints}},
   institution = {EPFL},
   year = 2010
-}
+  }
